@@ -65,6 +65,8 @@
     (setf start (point))
     (search-forward-regexp "^endstream")
     (setf curlen (max 0 (- (match-beginning 0) start 1)))
+    ;; (add-text-properties start (match-beginning 0)
+    ;;                      '(font-lock-multiline t))
     (goto-char (match-end 0))
     (when (and *pdf-fix-stream-length*
                (/= curlen (cdr (assq 'data lenprop))))
@@ -169,10 +171,9 @@
                 (t
                  (collect (char-after))
                  (forward-char 1)))))
-      (setf data (apply #'string (reverse data)))
       `((type . lstring)
         (offset . ,offset)
-        (data . ,data)))))
+        (data . ,(apply #'string (reverse data)))))))
 
 (defun pdf--read-hex-string ()
   (goto-char (match-end 0))
@@ -191,10 +192,9 @@
       (unless (looking-at ">")
         (error "Unterminated hex string (line %d)" (line-number-at-pos)))
       (forward-char 1)
-      (setf data (apply #'string (reverse data)))
       `((type . xstring)
         (offset . ,offset)
-        (data . ,data)))))
+        (data . ,(apply #'string (reverse data)))))))
 
 (defun pdf--read-xref-section (start count)
   (goto-char (match-end 0))
@@ -360,10 +360,62 @@
 
 ;;; mode def
 
+(defvar *pdf-font-lock-defaults*
+  `((
+     ;; multi-line is not reliable
+     ;; ("\\(stream\\)\\(\\(?:.\\|\n\\)*?\\)\\(endstream\\)"
+     ;;  (1 font-lock-keyword-face)
+     ;;  (2 font-lock-doc-face)
+     ;;  (3 font-lock-keyword-face))
+
+     ("\\(%+\\)\\(.*\\)"
+      (1 font-lock-comment-delimiter-face)
+      (2 font-lock-comment-face))
+
+     ("/[[:word:]]+" . font-lock-function-name-face)
+
+     ("\\<\\([[:digit:]]+\s+[[:digit:]]\\)+\s+\\(obj\\)\\>"
+      (1 font-lock-variable-name-face)
+      (2 font-lock-keyword-face))
+
+     ("\\<\\([[:digit:]]+\s+[[:digit:]]\\)+\s+\\(R\\)\\>"
+      (1 font-lock-variable-name-face)
+      (2 font-lock-variable-name-face))
+
+     (,(regexp-opt '("obj" "endobj"
+                     "stream" "endstream"
+                     "xref" "startxref" "trailer")
+                   'words)
+      . font-lock-keyword-face)
+
+     ("<\\([a-fA-F0-9[:space:]]+\\)>" (1 font-lock-string-face))
+
+     ("(\\(.*?\\))" (1 font-lock-string-face))
+
+     ("[-+]?[[:digit:]]+\\(?:\.[[:digit:]]+\\)?" . font-lock-constant-face)
+     )))
+
 (define-derived-mode pdf-mode
-  text-mode "PDF"
+  fundamental-mode "PDF"
   "Major mode for editing PDF."
-  (add-hook 'write-contents-functions 'pdf-fix-refs))
+
+  (make-variable-buffer-local 'comment-start)
+
+  (modify-syntax-entry ?< "(>" pdf-mode-syntax-table)
+  (modify-syntax-entry ?> ")<" pdf-mode-syntax-table)
+  (dolist (i '(?. ?- ?_ ?* ?+))
+    (modify-syntax-entry i "w" pdf-mode-syntax-table))
+
+  ;; WTF?  this breaks our parser!
+  ;; (modify-syntax-entry ?% "< b" pdf-mode-syntax-table)
+  ;; (modify-syntax-entry ?\n "> b" pdf-mode-syntax-table)
+
+  (add-hook 'write-contents-functions 'pdf-fix-refs)
+  (setf comment-start "%"
+        comment-end "")
+
+  ;; (setf font-lock-multiline t)
+  (setf font-lock-defaults *pdf-font-lock-defaults*))
 
 (provide 'pdf-mode)
 ;;; pdf-mode.el ends here
