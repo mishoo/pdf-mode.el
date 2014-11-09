@@ -30,6 +30,13 @@
 (defvar *pdf--rx-delimiter* "\\(?:[][)(><}{/%[:space:]]\\|$\\)")
 (defvar *pdf-fix-stream-length* nil)
 
+(defun pdf--croak (msg)
+  (error (format "%s (%d:%d)" msg 
+                 ;; always enjoyed the similitude between the
+                 ;; following two function names:
+                 (line-number-at-pos)
+                 (current-column))))
+
 (defun pdf--skip-whitespace ()
   (while (looking-at "[[:space:]]+\\|\\(?:%.*\\)")
     (goto-char (match-end 0))))
@@ -44,7 +51,7 @@
         (data . ,(pdf--read)))
     (if (looking-at "endobj")
         (goto-char (match-end 0))
-      (error "Missing endobj (line %d)" (line-number-at-pos)))))
+      (pdf--croak "Missing endobj"))))
 
 (defun pdf--dict-lookup (dict propname)
   (cl-assoc propname (cdr (assq 'data dict))
@@ -57,7 +64,7 @@
         (offset (match-beginning 0))
         start curlen)
     (unless lenprop
-      (error "No Length in stream dictionary (line %d)" (line-number-at-pos)))
+      (pdf--croak "No Length in stream dictionary"))
     (goto-char (match-end 0))
     (delete-region (point)
                    (save-excursion (end-of-line) (point)))
@@ -190,7 +197,7 @@
           (collect code))
         (pdf--skip-whitespace))
       (unless (looking-at ">")
-        (error "Unterminated hex string (line %d)" (line-number-at-pos)))
+        (pdf--croak "Unterminated hex string"))
       (forward-char 1)
       `((type . xstring)
         (offset . ,offset)
@@ -257,7 +264,7 @@
                             *pdf--rx-delimiter*))
         (pdf--read-ref))
 
-       ((looking-at "[-+]?[[:digit:]]+\\(?:\.[[:digit:]]+\\)?")
+       ((looking-at "[-+]?[[:digit:]]+\\(?:\\.[[:digit:]]+\\)?")
         (pdf--read-number))
 
        ((looking-at (concat "\\(true\\|false\\)" *pdf--rx-delimiter*))
@@ -282,7 +289,7 @@
         (pdf--read-startxref))
 
        ((not (eobp))
-        (error "Can't parse that (line %d)" (line-number-at-pos))))
+        (pdf--croak "Can't parse that")))
 
     (pdf--skip-whitespace)))
 
@@ -392,7 +399,7 @@
 
      ("(\\(.*?\\))" (1 font-lock-string-face))
 
-     ("[-+]?[[:digit:]]+\\(?:\.[[:digit:]]+\\)?" . font-lock-constant-face)
+     ("[-+]?[[:digit:]]+\\(?:\\.[[:digit:]]+\\)?" . font-lock-constant-face)
      )))
 
 (define-derived-mode pdf-mode
