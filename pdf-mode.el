@@ -360,10 +360,12 @@
 
 (defun pdf-fix-refs ()
   (interactive)
-  (save-excursion
-    (save-restriction
-      (widen)
-      (pdf--fix-refs))))
+  (atomic-change-group
+    (save-excursion
+      (save-restriction
+        (widen)
+        (pdf--fix-refs))))
+  nil)
 
 ;;; mode def
 
