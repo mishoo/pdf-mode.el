@@ -94,14 +94,26 @@
   (goto-char (match-end 0))
   (let ((dict `((type . dictionary)
                 (offset . ,(match-beginning 0))
-                (data . ,(cl-loop until (or (eobp) (looking-at ">>"))
+                (data . ,(cl-loop do (pdf--skip-whitespace)
+                                  until (or (eobp) (looking-at ">>"))
                                   collect `(,(pdf--read) . ,(pdf--read)))))))
     (unless (eobp)
       (goto-char (match-end 0)))
     (pdf--skip-whitespace)
     (if (looking-at "stream")
         (pdf--read-stream dict)
-      dict)))
+        dict)))
+
+(defun pdf--read-array ()
+  (goto-char (match-end 0))
+  (prog1
+      `((type . array)
+        (offset . ,(match-beginning 0))
+        (data . ,(cl-loop do (pdf--skip-whitespace)
+                          until (or (eobp) (looking-at "\\]"))
+                          collect (pdf--read))))
+    (unless (eobp)
+      (goto-char (match-end 0)))))
 
 (defun pdf--read-name ()
   (goto-char (match-end 0))
@@ -110,16 +122,6 @@
     (data . ,(when (looking-at (concat "\\(.*?\\)" *pdf--rx-delimiter*))
                (goto-char (match-end 1))
                (match-string 1)))))
-
-(defun pdf--read-array ()
-  (goto-char (match-end 0))
-  (prog1
-      `((type . array)
-        (offset . ,(match-beginning 0))
-        (data . ,(cl-loop until (or (eobp) (looking-at "\\]"))
-                          collect (pdf--read))))
-    (unless (eobp)
-      (goto-char (match-end 0)))))
 
 (defun pdf--read-number ()
   (prog1
