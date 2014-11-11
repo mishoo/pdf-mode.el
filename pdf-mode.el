@@ -31,7 +31,7 @@
 (defvar *pdf-fix-stream-length* nil)
 
 (defun pdf--croak (msg)
-  (error (format "%s (%d:%d)" msg 
+  (error (format "%s (%d:%d)" msg
                  ;; always enjoyed the similitude between the
                  ;; following two function names:
                  (line-number-at-pos)
@@ -53,12 +53,6 @@
         (goto-char (match-end 0))
       (pdf--croak "Missing endobj"))))
 
-(defun pdf--dict-lookup (dict propname)
-  (cl-assoc propname (cdr (assq 'data dict))
-            :test #'string-equal
-            :key (lambda (prop)
-                   (cdr (assq 'data prop)))))
-
 (defun pdf--read-stream (dict)
   (let ((lenprop (cdr (pdf--dict-lookup dict "Length")))
         (offset (match-beginning 0))
@@ -70,7 +64,7 @@
                    (save-excursion (end-of-line) (point)))
     (forward-char)
     (setf start (point))
-    (search-forward-regexp "^endstream")
+    (search-forward-regexp "^endstream" nil t)
     (setf curlen (max 0 (- (match-beginning 0) start 1)))
     ;; (add-text-properties start (match-beginning 0)
     ;;                      '(font-lock-multiline t))
@@ -305,6 +299,12 @@
 
 ;;; AST accessors
 
+(defun pdf--dict-lookup (dict propname)
+  (cl-assoc propname (cdr (assq 'data dict))
+            :test #'string-equal
+            :key (lambda (prop)
+                   (cdr (assq 'data prop)))))
+
 (defun pdf.type (node) (cdr (assq 'type node)))
 (defun pdf.data (node) (cdr (assq 'data node)))
 (defun pdf.offset (node) (cdr (assq 'offset node)))
@@ -373,11 +373,6 @@
 
 (defvar *pdf-font-lock-defaults*
   `((
-     ;; multi-line is not reliable
-     ;; ("\\(stream\\)\\(\\(?:.\\|\n\\)*?\\)\\(endstream\\)"
-     ;;  (1 font-lock-keyword-face)
-     ;;  (2 font-lock-doc-face)
-     ;;  (3 font-lock-keyword-face))
 
      ("\\(%+\\)\\(.*\\)"
       (1 font-lock-comment-delimiter-face)
@@ -399,11 +394,14 @@
                    'words)
       . font-lock-keyword-face)
 
+     (,(regexp-opt '("true" "false" "null")) . font-lock-builtin-face)
+
      ("<\\([a-fA-F0-9[:space:]]+\\)>" (1 font-lock-string-face))
 
      ("(\\(.*?\\))" (1 font-lock-string-face))
 
      ("[-+]?[[:digit:]]+\\(?:\\.[[:digit:]]+\\)?" . font-lock-constant-face)
+
      )))
 
 (define-derived-mode pdf-mode
