@@ -265,7 +265,8 @@
   (goto-char (match-end 0))
   (pdf--skip-whitespace)
   (cl-loop while (looking-at "\\([[:digit:]]\\{10\\}\\) \\([[:digit:]]\\{5\\}\\) \\([fn]\\)")
-           collect `((id . ,(incf start))
+           collect `((type . xref-section)
+                     (id . ,(incf start))
                      (offset . ,(string-to-number (match-string 1)))
                      (rev . ,(string-to-number (match-string 2)))
                      (fn . ,(match-string 3)))
@@ -320,22 +321,71 @@
 (defun pdf.type (node) (cdr (assq 'type node)))
 (defun pdf.data (node) (cdr (assq 'data node)))
 (defun pdf.offset (node) (cdr (assq 'offset node)))
+(defun pdf.start (node) (cdr (assq 'start node)))
 (defun pdf.end (node) (cdr (assq 'end node)))
+(defun pdf.length (node) (cdr (assq 'length node)))
 (defun pdf.dict-key (dict prop) (car (pdf--dict-lookup dict prop)))
 (defun pdf.dict-val (dict prop) (cdr (pdf--dict-lookup dict prop)))
 (defun pdf.id (node) (cdr (assq 'id node)))
 (defun pdf.rev (node) (cdr (assq 'rev node)))
+(defun pdf.dict (node) (cdr (assq 'dict node)))
+
+(defun pdf.visit (node func)
+  (funcall func node 'before)
+  (case (pdf.type node)
+    (object (pdf.visit (pdf.data node) func))
+    (stream (pdf.visit (pdf.dict node) func))
+    (dictionary (mapc (lambda (x)
+                        (pdf.visit (car x) func)
+                        (pdf.visit (cdr x) func))
+                      (pdf.data node)))
+    ((array xref) (mapc (lambda (x)
+                          (pdf.visit x func))
+                        (pdf.data node)))
+    (trailer (pdf.visit (pdf.data node) func)))
+  (funcall func node 'after))
+
+(defun pdf--fontify-nodes (nodes)
+  (font-lock-mode -1)
+  (mapc
+   (lambda (node)
+     (pdf.visit
+      node
+      (lambda (node stage)
+        (when (eq stage 'after)
+          (let* ((start (pdf.offset node))
+                 (end (pdf.end node))
+                 (type (pdf.type node))
+                 (prop (case type
+                         (number 'font-lock-constant-face)
+                         (name 'font-lock-function-name-face)
+                         (lstring 'font-lock-string-face)
+                         (xstring 'font-lock-string-face)
+                         (bool 'font-lock-builtin-face)
+                         (null 'font-lock-builtin-face)
+                         (ref 'font-lock-preprocessor-face)
+                         (xref 'font-lock-preprocessor-face)
+                         (stream
+                          (setf start (pdf.start node)
+                                end (+ start (pdf.length node)))
+                          'font-lock-doc-face))))
+            (when (and start end prop
+                       (>= start (point-min))
+                       (<= end (point-max)))
+              (add-text-properties start end `(face ,prop))))))))
+   nodes))
 
 ;;; --------------------------------------------------------------------
 
 (defun pdf--dig-buffer (cont)
-  (cl-loop for i in (pdf--parse)
+  (cl-loop with nodes = (pdf--parse)
+           for i in nodes
            for type = (pdf.type i)
            when (eq 'object type) collect i into objects
            when (eq 'xref type) collect i into xref
            when (eq 'startxref type) collect i into startxref
            when (eq 'trailer type) collect i into trailer
-           finally (return (funcall cont objects xref startxref trailer))))
+           finally (return (funcall cont nodes objects xref startxref trailer))))
 
 (defun pdf--do-reverse (things func)
   (mapc func
@@ -362,7 +412,7 @@
         (del (lambda (x)
                (delete-region (pdf.offset x) (pdf.end x)))))
     (pdf--dig-buffer
-     (lambda (objects xref startxref trailer)
+     (lambda (nodes objects xref startxref trailer)
        (let ((trailer-code (buffer-substring-no-properties
                             (pdf.offset (car trailer))
                             (pdf.end (car trailer)))))
@@ -371,7 +421,8 @@
          (let ((xref (point)))
            (pdf--write-xref objects)
            (insert trailer-code
-                   (format "startxref\n%d\n%%%%EOF" (- xref 1)))))))))
+                   (format "startxref\n%d\n%%%%EOF" (- xref 1)))))
+       (pdf--fontify-nodes (pdf--parse))))))
 
 (defun pdf-fix-refs ()
   (interactive)
@@ -398,7 +449,7 @@
       (2 font-lock-keyword-face))
 
      ("\\<\\([[:digit:]]+\s+[[:digit:]]\\)+\s+\\(R\\)\\>"
-      (1 font-lock-variable-name-face)
+      (1 font-lock-type-face)
       (2 font-lock-builtin-face))
 
      (,(regexp-opt '("obj" "endobj"
@@ -436,7 +487,9 @@
   (setf comment-start "%"
         comment-end "")
 
-  (setf font-lock-defaults *pdf-font-lock-defaults*))
+  ;; (setf font-lock-defaults *pdf-font-lock-defaults*)
+  (setf font-lock-defaults '(nil t))
+  )
 
 (provide 'pdf-mode)
 ;;; pdf-mode.el ends here
