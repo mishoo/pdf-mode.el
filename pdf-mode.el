@@ -58,6 +58,9 @@
        ((looking-at "[-+]?[[:digit:]]+\\(?:\\.[[:digit:]]+\\)?")
         (pdf--read-number))
 
+       ((looking-at "[-+]?\\(?:\\.[[:digit:]]+\\)")
+        (pdf--read-number))
+
        ((looking-at (concat "\\(true\\|false\\)" *pdf--rx-delimiter*))
         (pdf--read-bool))
 
@@ -728,19 +731,19 @@ the maximum ID among objects in the buffer."
   (setf font-lock-fontify-region-function 'pdf--fontify-region)
   (jit-lock-register 'pdf--fontify-region)
 
-  ;;;;; bindings
-
-  (define-key pdf-mode-map (kbd "C-c o") 'pdf-new-object)
-  (define-key pdf-mode-map (kbd "M-?") 'pdf-highlight-refs)
-  (define-key pdf-mode-map (kbd "M-.") 'pdf-find-definition)
-  (define-key pdf-mode-map (kbd "M-,") 'pdf-pop-location)
-
   (add-hook 'before-change-functions 'pdf--ensure-fontification nil t)
 
   ;; (setf font-lock-defaults *pdf-font-lock-defaults*)
   ;; (setf font-lock-defaults '(nil t))
 
   )
+
+;;; --- key bindings ---------------------------------------------------
+
+(define-key pdf-mode-map (kbd "C-c o") 'pdf-new-object)
+(define-key pdf-mode-map (kbd "M-?") 'pdf-highlight-refs)
+(define-key pdf-mode-map (kbd "M-.") 'pdf-find-definition)
+(define-key pdf-mode-map (kbd "M-,") 'pdf-pop-location)
 
 (provide 'pdf-mode)
 ;;; pdf-mode.el ends here
