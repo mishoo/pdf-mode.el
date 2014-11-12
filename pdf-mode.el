@@ -107,8 +107,8 @@
       (data . ,data))))
 
 (defun pdf--read-stream (dict)
-  (let ((lenprop (cdr (pdf--dict-lookup dict "Length")))
-        (offset (match-beginning 1))
+  (let ((offset (match-beginning 1))
+        (lenprop (cdr (pdf--dict-lookup dict "Length")))
         start curlen)
     (unless lenprop
       (pdf--croak "No Length in stream dictionary"))
@@ -266,8 +266,10 @@
   (pdf--skip-whitespace)
   (cl-loop while (looking-at "\\([[:digit:]]\\{10\\}\\) \\([[:digit:]]\\{5\\}\\) \\([fn]\\)")
            collect `((type . xref-section)
+                     (offset . ,(match-beginning 0))
+                     (end . ,(match-end 0))
+                     (address . ,(string-to-number (match-string 1)))
                      (id . ,(incf start))
-                     (offset . ,(string-to-number (match-string 1)))
                      (rev . ,(string-to-number (match-string 2)))
                      (fn . ,(match-string 3)))
            do (progn
@@ -279,9 +281,9 @@
     (goto-char (match-end 1))
     (pdf--skip-whitespace)
     (let ((data (cl-loop while (looking-at "\\([[:digit:]]+\\)[[:space:]]+\\([[:digit:]]+\\)")
-                         collect (let ((start (string-to-number (match-string 1)))
-                                       (count (string-to-number (match-string 2))))
-                                   (pdf--read-xref-section start count))
+                         append (let ((start (string-to-number (match-string 1)))
+                                      (count (string-to-number (match-string 2))))
+                                  (pdf--read-xref-section start count))
                          do (pdf--skip-whitespace))))
       `((type . xref)
         (offset . ,offset)
@@ -345,14 +347,14 @@
     (trailer (pdf.visit (pdf.data node) func)))
   (funcall func node 'after))
 
-(defun pdf--fontify-nodes (nodes)
+(defun pdf--fontify-buffer ()
   (font-lock-mode -1)
   (mapc
    (lambda (node)
      (pdf.visit
       node
       (lambda (node stage)
-        (when (eq stage 'after)
+        (when (eq stage 'before)
           (let* ((start (pdf.offset node))
                  (end (pdf.end node))
                  (type (pdf.type node))
@@ -364,16 +366,19 @@
                          (bool 'font-lock-builtin-face)
                          (null 'font-lock-builtin-face)
                          (ref 'font-lock-preprocessor-face)
-                         (xref 'font-lock-preprocessor-face)
+                         (xref-section 'font-lock-preprocessor-face)
+                         ((object trailer xref startxref) 'font-lock-keyword-face)
                          (stream
                           (setf start (pdf.start node)
                                 end (+ start (pdf.length node)))
-                          'font-lock-doc-face))))
+                          'font-lock-doc-face)
+                         (otherwise 'default))))
+            (message "%s" type)
             (when (and start end prop
                        (>= start (point-min))
                        (<= end (point-max)))
               (add-text-properties start end `(face ,prop))))))))
-   nodes))
+   (pdf--parse)))
 
 ;;; --------------------------------------------------------------------
 
@@ -422,7 +427,7 @@
            (pdf--write-xref objects)
            (insert trailer-code
                    (format "startxref\n%d\n%%%%EOF" (- xref 1)))))
-       (pdf--fontify-nodes (pdf--parse))))))
+       (pdf--fontify-buffer)))))
 
 (defun pdf-fix-refs ()
   (interactive)
@@ -487,8 +492,8 @@
   (setf comment-start "%"
         comment-end "")
 
-  ;; (setf font-lock-defaults *pdf-font-lock-defaults*)
-  (setf font-lock-defaults '(nil t))
+  (setf font-lock-defaults *pdf-font-lock-defaults*)
+  ;; (setf font-lock-defaults '(nil t))
   )
 
 (provide 'pdf-mode)
