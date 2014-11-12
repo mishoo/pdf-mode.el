@@ -21,14 +21,19 @@
 
 ;;; Commentary:
 
-;;
+;; This is a major mode for editing raw PDF files.
 
 ;;; Code:
 
 (require 'cl)
 
+;;; --- parser and syntax highlighting ---------------------------------
+
 (defvar *pdf--rx-delimiter* "\\(?:[][)(><}{/%[:space:]]\\|$\\)")
-(defvar *pdf-fix-stream-length* nil)
+(defvar *pdf--fix-stream-length* nil)
+(defvar *pdf--highlight* nil)
+(defvar *pdf--no-parse-errors* nil)
+(defvar *pdf--error-locations* nil)
 
 (defun pdf--read ()
   (pdf--skip-whitespace)
@@ -75,19 +80,29 @@
         (pdf--read-startxref))
 
        ((not (eobp))
-        (pdf--croak "Can't parse that")))
+        (pdf--croak "Can't parse that" t)))
 
     (pdf--skip-whitespace)))
 
-(defun pdf--croak (msg)
-  (error (format "%s (%d:%d)" msg
-                 ;; always enjoyed the similitude between the
-                 ;; following two function names:
-                 (line-number-at-pos)
-                 (current-column))))
+(defun pdf--croak (msg &optional skip)
+  (push (point) *pdf--error-locations*)
+  (unless *pdf--no-parse-errors*
+    (error (format "%s (%d:%d)" msg
+                   ;; always enjoyed the similitude between the
+                   ;; following two function names:
+                   (line-number-at-pos)
+                   (current-column))))
+  (when skip
+    (when *pdf--highlight*
+      (remove-text-properties (point) (1+ (point)) '(face nil)))
+    (forward-char 1)))
 
 (defun pdf--skip-whitespace ()
-  (while (looking-at "[[:space:]]+\\|\\(?:%.*\\)")
+  (while (looking-at "\\(?:[[:space:]]+\\|\\(%.*\\)\\)")
+    (when (and *pdf--highlight* (match-beginning 1))
+      (add-text-properties (match-beginning 1)
+                           (match-end 1)
+                           '(face font-lock-comment-face)))
     (goto-char (match-end 0))))
 
 (defun pdf--read-object ()
@@ -113,23 +128,16 @@
     (unless lenprop
       (pdf--croak "No Length in stream dictionary"))
     (goto-char (match-end 1))
-    (delete-region (point)
-                   (save-excursion (end-of-line) (point)))
-    (forward-char)
-    (setf start (point))
+    (setf start (1+ (point)))
     (unless (search-forward-regexp "^endstream" nil t)
       (pdf--croak "Missing endstream"))
     (setf curlen (max 0 (- (match-beginning 0) start 1)))
     (goto-char (match-end 0))
-    (when (and *pdf-fix-stream-length*
-               (/= curlen (cdr (assq 'data lenprop))))
+    (when *pdf--fix-stream-length*
       (save-excursion
-        (goto-char (cdr (assq 'offset lenprop)))
-        (delete-region (point) (progn
-                                 (skip-chars-forward "+-[:digit:]")
-                                 (point)))
+        (goto-char (pdf.offset lenprop))
+        (delete-region (point) (pdf.end lenprop))
         (insert (number-to-string curlen))))
-    (setf (cdr (assq 'data lenprop)) curlen)
     `((type . stream)
       (offset . ,offset)
       (end . ,(point))
@@ -190,8 +198,8 @@
   `((type . ref)
     (offset . ,(match-beginning 1))
     (end . ,(point))
-    (data . ((id . ,(string-to-number (match-string 2)))
-             (rev . ,(string-to-number (match-string 3)))))))
+    (id . ,(string-to-number (match-string 2)))
+    (rev . ,(string-to-number (match-string 3)))))
 
 (defun pdf--read-bool ()
   (goto-char (match-end 1))
@@ -305,14 +313,16 @@
     (end . ,(point))))
 
 (defun pdf--parse ()
+  (setf *pdf--error-locations* '())
   (save-excursion
     (save-restriction
       (widen)
       (goto-char (point-min))
       (cl-loop for thing = (pdf--read)
-               while thing collect thing))))
+               when thing collect thing
+               until (eobp)))))
 
-;;; AST accessors
+;;; AST utilities
 
 (defun pdf--dict-lookup (dict propname)
   (cl-assoc propname (cdr (assq 'data dict))
@@ -323,11 +333,17 @@
 (defun pdf.type (node) (cdr (assq 'type node)))
 (defun pdf.data (node) (cdr (assq 'data node)))
 (defun pdf.offset (node) (cdr (assq 'offset node)))
+(defun pdf.address (node) (cdr (assq 'address node)))
 (defun pdf.start (node) (cdr (assq 'start node)))
 (defun pdf.end (node) (cdr (assq 'end node)))
 (defun pdf.length (node) (cdr (assq 'length node)))
 (defun pdf.dict-key (dict prop) (car (pdf--dict-lookup dict prop)))
 (defun pdf.dict-val (dict prop) (cdr (pdf--dict-lookup dict prop)))
+(defun pdf.object-type (obj)
+  (let ((dict (pdf.data obj)))
+    (when (and dict (eq 'dictionary (pdf.type dict)))
+      (let ((type (pdf.dict-val dict "Type")))
+        (and type (pdf.data type))))))
 (defun pdf.id (node) (cdr (assq 'id node)))
 (defun pdf.rev (node) (cdr (assq 'rev node)))
 (defun pdf.dict (node) (cdr (assq 'dict node)))
@@ -347,40 +363,196 @@
     (trailer (pdf.visit (pdf.data node) func)))
   (funcall func node 'after))
 
-(defun pdf--fontify-buffer ()
-  (font-lock-mode -1)
-  (mapc
-   (lambda (node)
-     (pdf.visit
-      node
-      (lambda (node stage)
-        (when (eq stage 'before)
-          (let* ((start (pdf.offset node))
-                 (end (pdf.end node))
-                 (type (pdf.type node))
-                 (prop (case type
-                         (number 'font-lock-constant-face)
-                         (name 'font-lock-function-name-face)
-                         (lstring 'font-lock-string-face)
-                         (xstring 'font-lock-string-face)
-                         (bool 'font-lock-builtin-face)
-                         (null 'font-lock-builtin-face)
-                         (ref 'font-lock-preprocessor-face)
-                         (xref-section 'font-lock-preprocessor-face)
-                         ((object trailer xref startxref) 'font-lock-keyword-face)
-                         (stream
-                          (setf start (pdf.start node)
-                                end (+ start (pdf.length node)))
-                          'font-lock-doc-face)
-                         (otherwise 'default))))
-            (message "%s" type)
-            (when (and start end prop
-                       (>= start (point-min))
-                       (<= end (point-max)))
-              (add-text-properties start end `(face ,prop))))))))
-   (pdf--parse)))
+;;; fontification; should be better built-in the parser
 
-;;; --------------------------------------------------------------------
+(defvar *pdf--needs-fontification* nil)
+
+(defun pdf--ensure-fontification (&rest ignore)
+  (setf *pdf--needs-fontification* t))
+
+(defun pdf--fontify-node (node)
+  (pdf.visit
+   node
+   (lambda (node stage)
+     (when (eq stage 'before)
+       (let* ((start (pdf.offset node))
+              (end (pdf.end node))
+              (type (pdf.type node))
+              (prop (case type
+                      (number 'font-lock-constant-face)
+                      (name 'font-lock-builtin-face)
+                      (lstring 'font-lock-string-face)
+                      (xstring 'font-lock-string-face)
+                      (bool 'font-lock-constant-face)
+                      (null 'font-lock-constant-face)
+                      (ref 'font-lock-type-face)
+                      (xref-section 'font-lock-type-face)
+                      ((object trailer xref startxref) 'font-lock-keyword-face)
+                      (stream
+                       (setf start (pdf.start node)
+                             end (+ start (pdf.length node)))
+                       'font-lock-doc-face)
+                      (otherwise 'default))))
+         (when (and start end prop
+                    (>= start (point-min))
+                    (<= end (point-max)))
+           (add-text-properties start end `(face ,prop))))))))
+
+(defun pdf--fontify-buffer ()
+  (when *pdf--needs-fontification*
+    (setf *pdf--needs-fontification* nil)
+    (let ((*pdf--highlight* t)
+          (*pdf--no-parse-errors* t))
+      (mapc #'pdf--fontify-node (pdf--parse)))))
+
+(defun pdf--fontify-region (begin end &optional verbose)
+  (pdf--fontify-buffer))
+
+;;; --- highlight references -------------------------------------------
+
+(defun pdf--highlight-regions (regions &optional face)
+  (cl-loop for (start end myface) in regions
+           do (let ((o (make-overlay start end)))
+                (overlay-put o 'face (or myface face 'highlight))
+                (overlay-put o 'evaporate t)
+                (overlay-put o 'pdf-highlight t))))
+
+(defun pdf--highlight-get-overlays ()
+  (sort (cl-loop for o in (overlays-in (point-min) (point-max))
+                 when (overlay-get o 'pdf-highlight)
+                 collect o)
+        (lambda (a b)
+          (< (overlay-start a) (overlay-start b)))))
+
+(defun pdf-goto-next-symbol ()
+  "Move to the next highlighted symbol.  See `pdf-highlight-refs'"
+  (interactive)
+  (catch 'done
+    (dolist (i (pdf--highlight-get-overlays))
+      (let ((x (overlay-start i)))
+        (when (> x (point))
+          (goto-char x)
+          (throw 'done nil))))))
+
+(defun pdf-goto-prev-symbol ()
+  "Move to the previous highlighted symbol.  See `pdf-highlight-refs'"
+  (interactive)
+  (catch 'done
+    (dolist (i (reverse (pdf--highlight-get-overlays)))
+      (when (< (overlay-end i) (point))
+        (goto-char (overlay-start i))
+        (throw 'done nil)))))
+
+(defun pdf-forget-highlighting ()
+  "Remove symbol highlight overlays.  See `pdf-highlight-refs'"
+  (interactive)
+  (remove-overlays (point-min) (point-max) 'pdf-highlight t)
+  (pdf--highlight-mode 0))
+
+(defvar pdf--highlight-mode-keymap (make-sparse-keymap))
+(define-key pdf--highlight-mode-keymap (kbd "C-<down>") 'pdf-goto-next-symbol)
+(define-key pdf--highlight-mode-keymap (kbd "C-<up>") 'pdf-goto-prev-symbol)
+(define-key pdf--highlight-mode-keymap (kbd "<escape>") 'pdf-forget-highlighting)
+(define-key pdf--highlight-mode-keymap (kbd "C-g") 'pdf-forget-highlighting)
+
+(define-minor-mode pdf--highlight-mode
+  "Internal mode used by `pdf-mode` while highlighting references"
+  nil
+  nil
+  pdf--highlight-mode-keymap)
+
+(defun pdf-dig-at-point (cont)
+  (let ((*pdf--no-parse-errors* t)
+        (pt (point))
+        (path '())
+        (defs (make-hash-table))
+        (refs (make-hash-table))
+        (pages (make-hash-table)))
+    (mapc
+     (lambda (node)
+       (pdf.visit
+        node
+        (lambda (node stage)
+          (when (eq stage 'before)
+            (when (and (<= (pdf.offset node) pt)
+                       (<= pt (pdf.end node)))
+              (push node path))
+            (case (pdf.type node)
+              (object
+               (puthash (pdf.id node) node defs)
+               (when (string-equal "Page" (pdf.object-type node))
+                 (puthash (pdf.id node) node pages)))
+              (ref (puthash (pdf.id node)
+                            (cons node (gethash (pdf.id node) refs '()))
+                            refs)))))))
+     (pdf--parse))
+    (funcall cont path defs refs pages)))
+
+(defun pdf-highlight-refs ()
+  "Highlight references to the node at point.  The node is
+expected to be an object reference (of the form 10 0 R), or an
+object.  This enters a minor mode where the keys C-<up> /
+C-<down> allow you to move through the highlighted refs.  Exit
+this mode with <escape> or C-g."
+  (interactive)
+  (pdf-forget-highlighting)
+  (pdf-dig-at-point
+   (lambda (path defs refs pages)
+     (when path
+       (let ((node (car path)))
+         (case (pdf.type node)
+           ((ref object)
+            (let ((refs (gethash (pdf.id node) refs))
+                  (def (gethash (pdf.id node) defs)))
+              (when (or refs def)
+                (when def
+                  (pdf--highlight-regions (list (list (pdf.offset def)
+                                                      (pdf.end def)
+                                                      'secondary-selection))))
+                (pdf--highlight-regions (mapcar (lambda (ref)
+                                                  (list (pdf.offset ref)
+                                                        (pdf.end ref)))
+                                                refs))
+                (pdf--highlight-mode)
+                (message "%d references found" (length refs)))))))))))
+
+(defvar *pdf-locations* '())
+
+(defun pdf--goto-location (offset)
+  (when (or (not *pdf-locations*)
+            (/= (point) (car *pdf-locations*)))
+    (push (point) *pdf-locations*))
+  (goto-char offset))
+
+(defun pdf-pop-location ()
+  "Return to the previous location, usually after a jump with
+`pdf-find-definition'."
+  (interactive)
+  (let ((loc (pop *pdf-locations*)))
+    (when loc
+      (goto-char loc))))
+
+(defun pdf-find-definition ()
+  "Locate the definition of the object at point.  The object at
+point should be a reference (i.e. 10 0 R) or a xref
+section (i.e. 0000000234 00000 f)."
+  (interactive)
+  (pdf-dig-at-point
+   (lambda (path defs refs pages)
+     (unless (when path
+               (let ((node (car path)))
+                 (case (pdf.type node)
+                   ((ref)
+                    (let ((def (gethash (pdf.id node) defs)))
+                      (when def
+                        (pdf--goto-location (pdf.offset def))
+                        t)))
+                   ((xref-section)
+                    (pdf--goto-location (1+ (pdf.address node)))
+                    t))))
+       (message "No definition found")))))
+
+;;; --- rewrite xref utility -------------------------------------------
 
 (defun pdf--dig-buffer (cont)
   (cl-loop with nodes = (pdf--parse)
@@ -412,8 +584,8 @@
                       (pdf.rev obj))))
     (insert "\n")))
 
-(defun pdf--fix-refs ()
-  (let ((*pdf-fix-stream-length* t)
+(defun pdf--fix-xrefs ()
+  (let ((*pdf--fix-stream-length* t)
         (del (lambda (x)
                (delete-region (pdf.offset x) (pdf.end x)))))
     (pdf--dig-buffer
@@ -426,58 +598,115 @@
          (let ((xref (point)))
            (pdf--write-xref objects)
            (insert trailer-code
-                   (format "startxref\n%d\n%%%%EOF" (- xref 1)))))
-       (pdf--fontify-buffer)))))
+                   (format "startxref\n%d\n%%%%EOF" (- xref 1)))))))))
 
-(defun pdf-fix-refs ()
+(defun pdf-fix-xrefs ()
+  "Rewrite the xref, trailer and startxref sections based on the
+current buffer contents.  Note that any comments in that area
+will be lost.  This also fixes the /Length property for all PDF
+streams in the buffer.
+
+This function is called automatically before saving the buffer.
+Note that in case of a parse error, this function will fail and
+the buffer will not be saved.  I'm not entirely sure this is a
+good idea, but I got into it."
   (interactive)
   (atomic-change-group
     (save-excursion
       (save-restriction
         (widen)
-        (pdf--fix-refs))))
+        (pdf--fix-xrefs))))
   nil)
 
-;;; mode def
+(defun pdf-cleanup ()
+  (interactive)
+  "Removes any objects that are not referenced."
+  (pdf-dig-at-point
+   (lambda (path defs refs pages)
+     (let ((count 0)
+           (objects '()))
+       (maphash (lambda (key val)
+                  (push val objects))
+                defs)
+       (pdf--do-reverse objects
+                        (lambda (obj)
+                          (unless (gethash (pdf.id obj) refs)
+                            (incf count)
+                            (delete-region (pdf.offset obj)
+                                           (pdf.end obj)))))
+       (message "%d object(s) removed" count)))))
 
-(defvar *pdf-font-lock-defaults*
-  `((
+;;; --------------------------------------------------------------------
 
-     ("\\(%+\\)\\(.*\\)"
-      (1 font-lock-comment-delimiter-face)
-      (2 font-lock-comment-face))
+(defvar *pdf--new-object-template* "%d 0 obj <<
+  |
+>> endobj")
 
-     ("/[[:word:]]+" . font-lock-function-name-face)
+(defvar *pdf--new-stream-template* "%d 0 obj <<
+  /Length 0
+>> stream
+|
+endstream endobj")
 
-     ("\\<\\([[:digit:]]+\s+[[:digit:]]\\)+\s+\\(obj\\)\\>"
-      (1 font-lock-variable-name-face)
-      (2 font-lock-keyword-face))
+(defun pdf-new-object (&optional stream)
+  "Insert a new object definition.  Pass a prefix argument to
+make it a stream object.  The new object ID will be one more than
+the maximum ID among objects in the buffer."
+  (interactive "P")
+  (pdf--dig-buffer
+   (lambda (nodes objects &rest ignore)
+     (let ((max-id (reduce #'max objects :key #'pdf.id :initial-value 0)))
+       (insert (format (if stream
+                           *pdf--new-stream-template*
+                         *pdf--new-object-template*) (+ max-id 1)))
+       (search-backward "|")
+       (delete-forward-char 1)))))
 
-     ("\\<\\([[:digit:]]+\s+[[:digit:]]\\)+\s+\\(R\\)\\>"
-      (1 font-lock-type-face)
-      (2 font-lock-builtin-face))
+;; (defvar *pdf-font-lock-defaults*
+;;   `((
 
-     (,(regexp-opt '("obj" "endobj"
-                     "stream" "endstream"
-                     "xref" "startxref" "trailer")
-                   'words)
-      . font-lock-keyword-face)
+;;      ("\\(%+\\)\\(.*\\)"
+;;       (1 font-lock-comment-delimiter-face)
+;;       (2 font-lock-comment-face))
 
-     (,(regexp-opt '("true" "false" "null")) . font-lock-builtin-face)
+;;      ("/[[:word:]]+" . font-lock-function-name-face)
 
-     ("<\\([a-fA-F0-9[:space:]]+\\)>" (1 font-lock-string-face))
+;;      ("\\<\\([[:digit:]]+\s+[[:digit:]]\\)+\s+\\(obj\\)\\>"
+;;       (1 font-lock-variable-name-face)
+;;       (2 font-lock-keyword-face))
 
-     ("(\\(.*?\\))" (1 font-lock-string-face))
+;;      ("\\<\\([[:digit:]]+\s+[[:digit:]]\\)+\s+\\(R\\)\\>"
+;;       (1 font-lock-type-face)
+;;       (2 font-lock-builtin-face))
 
-     ("[-+]?[[:digit:]]+\\(?:\\.[[:digit:]]+\\)?" . font-lock-constant-face)
+;;      (,(regexp-opt '("obj" "endobj"
+;;                      "stream" "endstream"
+;;                      "xref" "startxref" "trailer")
+;;                    'words)
+;;       . font-lock-keyword-face)
 
-     )))
+;;      (,(regexp-opt '("true" "false" "null")) . font-lock-builtin-face)
+
+;;      ("<\\([a-fA-F0-9[:space:]]+\\)>" (1 font-lock-string-face))
+
+;;      ("(\\(.*?\\))" (1 font-lock-string-face))
+
+;;      ("[-+]?[[:digit:]]+\\(?:\\.[[:digit:]]+\\)?" . font-lock-constant-face)
+
+;;      )))
 
 (define-derived-mode pdf-mode
   fundamental-mode "PDF"
   "Major mode for editing PDF."
 
   (make-variable-buffer-local 'comment-start)
+  (make-variable-buffer-local '*pdf--error-locations*)
+  (make-variable-buffer-local '*pdf--needs-fontification*)
+  (make-variable-buffer-local 'font-lock-fontify-buffer-function)
+  (make-variable-buffer-local 'font-lock-fontify-region-function)
+  (make-variable-buffer-local 'next-error-function)
+
+  ;;;;; syntax
 
   (modify-syntax-entry ?< "(>" pdf-mode-syntax-table)
   (modify-syntax-entry ?> ")<" pdf-mode-syntax-table)
@@ -488,12 +717,29 @@
   ;; (modify-syntax-entry ?% "< b" pdf-mode-syntax-table)
   ;; (modify-syntax-entry ?\n "> b" pdf-mode-syntax-table)
 
-  (add-hook 'write-contents-functions 'pdf-fix-refs)
+  (add-hook 'write-contents-functions 'pdf-fix-xrefs nil t)
   (setf comment-start "%"
         comment-end "")
 
-  (setf font-lock-defaults *pdf-font-lock-defaults*)
+  ;;;;; font-lock
+
+  (pdf--ensure-fontification)
+  (setf font-lock-fontify-buffer-function 'pdf--fontify-buffer)
+  (setf font-lock-fontify-region-function 'pdf--fontify-region)
+  (jit-lock-register 'pdf--fontify-region)
+
+  ;;;;; bindings
+
+  (define-key pdf-mode-map (kbd "C-c o") 'pdf-new-object)
+  (define-key pdf-mode-map (kbd "M-?") 'pdf-highlight-refs)
+  (define-key pdf-mode-map (kbd "M-.") 'pdf-find-definition)
+  (define-key pdf-mode-map (kbd "M-,") 'pdf-pop-location)
+
+  (add-hook 'before-change-functions 'pdf--ensure-fontification nil t)
+
+  ;; (setf font-lock-defaults *pdf-font-lock-defaults*)
   ;; (setf font-lock-defaults '(nil t))
+
   )
 
 (provide 'pdf-mode)
