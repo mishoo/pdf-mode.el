@@ -694,16 +694,16 @@ the maximum ID among objects in the buffer."
 
 ;;      )))
 
+(make-variable-buffer-local 'comment-start)
+(make-variable-buffer-local '*pdf--error-locations*)
+(make-variable-buffer-local '*pdf--needs-fontification*)
+(make-variable-buffer-local 'font-lock-fontify-buffer-function)
+(make-variable-buffer-local 'font-lock-fontify-region-function)
+(make-variable-buffer-local 'next-error-function)
+
 (define-derived-mode pdf-mode
   fundamental-mode "PDF"
   "Major mode for editing PDF."
-
-  (make-variable-buffer-local 'comment-start)
-  (make-variable-buffer-local '*pdf--error-locations*)
-  (make-variable-buffer-local '*pdf--needs-fontification*)
-  (make-variable-buffer-local 'font-lock-fontify-buffer-function)
-  (make-variable-buffer-local 'font-lock-fontify-region-function)
-  (make-variable-buffer-local 'next-error-function)
 
   ;;;;; syntax
 
