@@ -26,7 +26,7 @@ Features:
 
 (customize `pdf-mode-map`)
 
-- `C-c o` — insert a new object (at point; make sure the cursor is somewhere where an object makes sense).  Pass a
+- `C-c C-o` — insert a new object (at point; make sure the cursor is somewhere where an object makes sense).  Pass a
   prefix argument (`C-u`) to make the new object a stream.
 
 - `M-?` — highlight references to object/reference at point.

@@ -807,7 +807,7 @@ the maximum ID among objects in the buffer."
 
 ;;; --- key bindings ---------------------------------------------------
 
-(define-key pdf-mode-map (kbd "C-c o") 'pdf-new-object)
+(define-key pdf-mode-map (kbd "C-c C-o") 'pdf-new-object)
 (define-key pdf-mode-map (kbd "M-?") 'pdf-highlight-refs)
 (define-key pdf-mode-map (kbd "M-.") 'pdf-find-definition)
 (define-key pdf-mode-map (kbd "M-,") 'pdf-pop-location)
