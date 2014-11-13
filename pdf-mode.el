@@ -671,7 +671,7 @@ good idea, but I got into it."
       (unwind-protect
           (progn
             (with-current-buffer stderr
-              (beginning-of-buffer)
+              (goto-char (point-min))
               (when (looking-at "[[:space:]]*gzip: stdin: invalid compressed data")
                 ;; the stream was probably not deflated, or we screwed up.
                 (unless *pdf--no-parse-errors*
