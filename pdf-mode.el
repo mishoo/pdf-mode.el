@@ -342,6 +342,15 @@
 (defun pdf.id (node) (cdr (assq 'id node)))
 (defun pdf.rev (node) (cdr (assq 'rev node)))
 (defun pdf.dict (node) (cdr (assq 'dict node)))
+(defun pdf.array? (node) (eq 'array (pdf.type node)))
+(defun pdf.name? (node &optional name)
+  (and (eq 'name (pdf.type node))
+       (or (not name)
+           (string= name (pdf.data node)))))
+(defun pdf.stream (node)
+  (case (pdf.type node)
+    (stream node)
+    (object (pdf.stream (pdf.data node)))))
 
 (defun pdf.object-type (obj)
   (let ((dict (pdf.data obj)))
@@ -463,8 +472,7 @@
   pdf--highlight-mode-keymap)
 
 (defun pdf-dig-at-point (cont)
-  (let ((*pdf--no-parse-errors* t)
-        (pt (point))
+  (let ((pt (point))
         (path '())
         (defs (make-hash-table))
         (refs (make-hash-table))
@@ -486,7 +494,8 @@
               (ref (puthash (pdf.id node)
                             (cons node (gethash (pdf.id node) refs '()))
                             refs)))))))
-     (pdf--parse))
+     (let ((*pdf--no-parse-errors* t))
+       (pdf--parse)))
     (funcall cont path defs refs pages)))
 
 (defun pdf-highlight-refs ()
@@ -636,6 +645,66 @@ good idea, but I got into it."
                             (delete-region (pdf.offset obj)
                                            (pdf.end obj)))))
        (message "%d object(s) removed" count)))))
+
+;;; --- decompress deflated streams ------------------------------------
+
+;; XXX: runs shell command (gzip).  we should use
+;; zlib-decompress-region if available (emacs 24.4) but I don't have
+;; it myself yet.
+(defun pdf--inflate-region (begin end)
+  (catch 'out
+    (let* ((compressed (buffer-substring-no-properties begin end))
+           (stderr (generate-new-buffer "gzip"))
+           (uncompressed (with-temp-buffer
+                           ;; prepend gzip header
+                           (insert "\x1f\x8b\x08\x00\x00\x00\x00\x00"
+                                   compressed)
+                           (shell-command-on-region (point-min) (point-max)
+                                                    "gzip -dc" nil t
+                                                    stderr nil)
+                           (buffer-string))))
+      (unwind-protect
+          (progn
+            (with-current-buffer stderr
+              (beginning-of-buffer)
+              (when (looking-at "[[:space:]]*gzip: stdin: invalid compressed data")
+                ;; the stream was probably not deflated, or we screwed up.
+                (unless *pdf--no-parse-errors*
+                  (message "Can't decompress this stream.  Maybe it's not deflated?"))
+                (throw 'out nil)))
+            (delete-region begin end)
+            (goto-char begin)
+            (insert uncompressed))
+        (kill-buffer stderr)))))
+
+(defun pdf--inflate-stream (stream)
+  (let* ((dict (pdf.dict stream))
+         (filter (pdf.dict-val dict "Filter"))
+         (is-array (pdf.array? filter)))
+    (pdf--inflate-region (pdf.start stream)
+                         (+ (pdf.start stream)
+                            (pdf.length stream)))
+    (when is-array
+      (setf filter (car (pdf.data filter))))
+    (when (pdf.name? filter "FlateDecode")
+      (delete-region (pdf.offset filter)
+                     (pdf.end filter))
+      (unless is-array
+        (goto-char (pdf.offset filter))
+        (insert "[ ]")))))
+
+(defun pdf-inflate-stream ()
+  "Decompress content of stream at point.  Garbage will probably
+occur if the stream is not really compressed.  If there's a
+/FlateDecode filter present, it will be removed."
+  (interactive)
+  (pdf-dig-at-point
+   (lambda (path &rest ignore)
+     (let ((stream (cl-loop for i in path when (pdf.stream i) do (return it))))
+       (if stream
+           (save-excursion
+             (pdf--inflate-stream stream))
+         (message "No stream at point %s" (car path)))))))
 
 ;;; --------------------------------------------------------------------
 
