@@ -133,8 +133,13 @@
       (pdf--croak "No Length in stream dictionary"))
     (let ((start (1+ (point))))
       (if (search-forward-regexp "endstream\\>" nil t)
-          (let ((curlen (max 0 (- (match-beginning 0) start 1))))
-            (goto-char (match-end 0))
+          (let ((curlen (- (match-beginning 0) start))
+                (end (match-end 0)))
+            (goto-char (match-beginning 0))
+            (when (and (looking-back "^")
+                       (> curlen 0))
+              (decf curlen))
+            (goto-char end)
             (when *pdf--fix-stream-length*
               (save-excursion
                 (goto-char (pdf.offset lenprop))
