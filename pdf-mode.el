@@ -29,7 +29,7 @@
 
 ;;; --- parser and syntax highlighting ---------------------------------
 
-(defvar *pdf--rx-delimiter* "\\(?:[][)(><}{/%[:space:]]\\|$\\)")
+(defvar *pdf--rx-delimiter* "\\(?:[][)(><}{/%[:space:]\n]\\|$\\)")
 (defvar *pdf--fix-stream-length* nil)
 (defvar *pdf--highlight* nil)
 (defvar *pdf--no-parse-errors* nil)
@@ -39,7 +39,7 @@
   (pdf--skip-whitespace)
   (prog1
       (cond
-       ((looking-at "\\([[:digit:]]+\\)[[:space:]]+\\([[:digit:]]+\\)[[:space:]]+obj")
+       ((looking-at "\\([[:digit:]]+\\)[[:space:]\n]+\\([[:digit:]]+\\)[[:space:]\n]+obj")
         (pdf--read-object))
 
        ((looking-at "<<")
@@ -51,7 +51,7 @@
        ((looking-at "\\[")
         (pdf--read-array))
 
-       ((looking-at (concat "\\(\\([[:digit:]]+\\)[[:space:]]+\\([[:digit:]]+\\)[[:space:]]+R\\)"
+       ((looking-at (concat "\\(\\([[:digit:]]+\\)[[:space:]\n]+\\([[:digit:]]+\\)[[:space:]\n]+R\\)"
                             *pdf--rx-delimiter*))
         (pdf--read-ref))
 
@@ -101,7 +101,7 @@
     (forward-char 1)))
 
 (defun pdf--skip-whitespace ()
-  (while (looking-at "\\(?:[[:space:]]+\\|\\(%.*\\)\\)")
+  (while (looking-at "\\(?:[[:space:]\n]+\\|\\(%.*\\)\\)")
     (when (and *pdf--highlight* (match-beginning 1))
       (add-text-properties (match-beginning 1)
                            (match-end 1)
@@ -114,39 +114,39 @@
         (id (string-to-number (match-string 1)))
         (rev (string-to-number (match-string 2)))
         (data (pdf--read)))
-    (unless (looking-at "endobj")
-      (pdf--croak "Missing endobj"))
-    (goto-char (match-end 0))
-    `((type . object)
-      (offset . ,offset)
-      (end . ,(point))
-      (id . ,id)
-      (rev . ,rev)
-      (data . ,data))))
+    (if (looking-at "endobj")
+        (progn
+          (goto-char (match-end 0))
+          `((type . object)
+            (offset . ,offset)
+            (end . ,(point))
+            (id . ,id)
+            (rev . ,rev)
+            (data . ,data)))
+      (pdf--croak "Missing endobj"))))
 
 (defun pdf--read-stream (dict)
+  (goto-char (match-end 1))
   (let ((offset (match-beginning 1))
-        (lenprop (cdr (pdf--dict-lookup dict "Length")))
-        start curlen)
+        (lenprop (pdf.dict-val dict "Length")))
     (unless lenprop
       (pdf--croak "No Length in stream dictionary"))
-    (goto-char (match-end 1))
-    (setf start (1+ (point)))
-    (unless (search-forward-regexp "^endstream" nil t)
-      (pdf--croak "Missing endstream"))
-    (setf curlen (max 0 (- (match-beginning 0) start 1)))
-    (goto-char (match-end 0))
-    (when *pdf--fix-stream-length*
-      (save-excursion
-        (goto-char (pdf.offset lenprop))
-        (delete-region (point) (pdf.end lenprop))
-        (insert (number-to-string curlen))))
-    `((type . stream)
-      (offset . ,offset)
-      (end . ,(point))
-      (start . ,start)
-      (length . ,curlen)
-      (dict . ,dict))))
+    (let ((start (1+ (point))))
+      (if (search-forward-regexp "endstream\\>" nil t)
+          (let ((curlen (max 0 (- (match-beginning 0) start 1))))
+            (goto-char (match-end 0))
+            (when *pdf--fix-stream-length*
+              (save-excursion
+                (goto-char (pdf.offset lenprop))
+                (delete-region (point) (pdf.end lenprop))
+                (insert (number-to-string curlen))))
+            `((type . stream)
+              (offset . ,offset)
+              (end . ,(point))
+              (start . ,start)
+              (length . ,curlen)
+              (dict . ,dict)))
+        (pdf--croak "Missing endstream")))))
 
 (defun pdf--read-dictionary ()
   (goto-char (match-end 0))
@@ -264,16 +264,17 @@
             (setf code (* code 16)))
           (collect code))
         (pdf--skip-whitespace))
-      (unless (looking-at ">")
-        (pdf--croak "Unterminated hex string"))
-      (forward-char 1)
-      `((type . xstring)
-        (offset . ,offset)
-        (end . ,(point))
-        (data . ,(apply #'string (reverse data)))))))
+      (if (looking-at ">")
+          (progn
+            (forward-char 1)
+            `((type . xstring)
+              (offset . ,offset)
+              (end . ,(point))
+              (data . ,(apply #'string (reverse data)))))
+        (pdf--croak "Unterminated hex string")))))
 
 (defun pdf--read-xref-section (start count)
-  (cl-loop while (looking-at "\\([[:digit:]]\\{10\\}\\) \\([[:digit:]]\\{5\\}\\) \\([fn]\\)[[:space:]]*$")
+  (cl-loop while (looking-at "\\([[:digit:]]\\{10\\}\\) \\([[:digit:]]\\{5\\}\\) \\([fn]\\)[[:space:]\n]*$")
            collect `((type . xref-section)
                      (offset . ,(match-beginning 0))
                      (end . ,(match-end 0))
@@ -287,7 +288,7 @@
   (let ((offset (match-beginning 1)))
     (goto-char (match-end 1))
     (pdf--skip-whitespace)
-    (let ((data (cl-loop while (looking-at "\\([[:digit:]]+\\)[[:space:]]+\\([[:digit:]]+\\)[[:space:]]*$")
+    (let ((data (cl-loop while (looking-at "\\([[:digit:]]+\\)[[:space:]\n]+\\([[:digit:]]+\\)[[:space:]\n]*$")
                          append (let ((start (string-to-number (match-string 1)))
                                       (count (string-to-number (match-string 2))))
                                   (goto-char (1+ (match-end 0)))
@@ -328,6 +329,8 @@
             :test #'string-equal
             :key (lambda (prop)
                    (cdr (assq 'data prop)))))
+(defun pdf.dict-key (dict prop) (car (pdf--dict-lookup dict prop)))
+(defun pdf.dict-val (dict prop) (cdr (pdf--dict-lookup dict prop)))
 
 (defun pdf.type (node) (cdr (assq 'type node)))
 (defun pdf.data (node) (cdr (assq 'data node)))
@@ -336,16 +339,15 @@
 (defun pdf.start (node) (cdr (assq 'start node)))
 (defun pdf.end (node) (cdr (assq 'end node)))
 (defun pdf.length (node) (cdr (assq 'length node)))
-(defun pdf.dict-key (dict prop) (car (pdf--dict-lookup dict prop)))
-(defun pdf.dict-val (dict prop) (cdr (pdf--dict-lookup dict prop)))
+(defun pdf.id (node) (cdr (assq 'id node)))
+(defun pdf.rev (node) (cdr (assq 'rev node)))
+(defun pdf.dict (node) (cdr (assq 'dict node)))
+
 (defun pdf.object-type (obj)
   (let ((dict (pdf.data obj)))
     (when (and dict (eq 'dictionary (pdf.type dict)))
       (let ((type (pdf.dict-val dict "Type")))
         (and type (pdf.data type))))))
-(defun pdf.id (node) (cdr (assq 'id node)))
-(defun pdf.rev (node) (cdr (assq 'rev node)))
-(defun pdf.dict (node) (cdr (assq 'dict node)))
 
 (defun pdf.visit (node func)
   (funcall func node 'before)
@@ -418,10 +420,10 @@
 
 (defun pdf--highlight-get-overlays ()
   (sort (cl-loop for o in (overlays-in (point-min) (point-max))
-                 when (overlay-get o 'pdf-highlight)
-                 collect o)
+                 when (overlay-get o 'pdf-highlight) collect o)
         (lambda (a b)
-          (< (overlay-start a) (overlay-start b)))))
+          (< (overlay-start a)
+             (overlay-start b)))))
 
 (defun pdf-goto-next-symbol ()
   "Move to the next highlighted symbol.  See `pdf-highlight-refs'"
@@ -710,11 +712,11 @@ the maximum ID among objects in the buffer."
   (modify-syntax-entry ?< "(>" pdf-mode-syntax-table)
   (modify-syntax-entry ?> ")<" pdf-mode-syntax-table)
   (dolist (i '(?. ?- ?_ ?* ?+))
-    (modify-syntax-entry i "w" pdf-mode-syntax-table))
+    (modify-syntax-entry i "_" pdf-mode-syntax-table))
 
   ;; WTF?  this breaks our parser!
-  ;; (modify-syntax-entry ?% "< b" pdf-mode-syntax-table)
-  ;; (modify-syntax-entry ?\n "> b" pdf-mode-syntax-table)
+  (modify-syntax-entry ?% "<" pdf-mode-syntax-table)
+  (modify-syntax-entry ?\n ">" pdf-mode-syntax-table)
 
   (add-hook 'write-contents-functions 'pdf-fix-xrefs nil t)
   (setf comment-start "%"
