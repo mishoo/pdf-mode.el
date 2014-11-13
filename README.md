@@ -40,7 +40,7 @@ Features:
 at all.  This is probably a bad idea; comments welcome.
 
 `pdf-fix-xrefs` expects `startxref` to really be at the end of the file, and the `trailer` dictionary to precede it, as
-per the spec.  The `xref` table can be anywhere in the page, but `pdf-fix-xrefs` fill move it at the end just before the
+per the spec.  The `xref` table can be anywhere in the page, but `pdf-fix-xrefs` will move it at the end just before the
 `trailer`.  If no `xref` section exists, `pdf-fix-xrefs` won't mind and will just generate one.
 
 Highlighting references with `M-?` (`M-x pdf-highlight-refs`) will enter a minor mode where the following additional key
