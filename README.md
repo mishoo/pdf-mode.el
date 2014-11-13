@@ -16,6 +16,8 @@ Features:
 
 - rewrites the `xref` section and stream `/Length`-s when saving a file (`M-x pdf-fix-xrefs`)
 
+- decompress stream at point (`M-x pdf-inflate-stream`)
+
 - easily insert a new object/stream (`M-x pdf-new-object`)
 
 - discard objects that are not referenced (`M-x pdf-cleanup`)
