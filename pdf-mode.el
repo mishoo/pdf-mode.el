@@ -711,7 +711,39 @@ occur if the stream is not really compressed.  If there's a
              (pdf--inflate-stream stream))
          (message "No stream at point %s" (car path)))))))
 
-;;; --------------------------------------------------------------------
+;;; --- other utilities ------------------------------------------------
+
+(defun pdf--edge-of-thing (edge cmp)
+  (pdf-dig-at-point
+   (lambda (path &rest ignore)
+     (cl-loop for i in path
+              for offset = (funcall edge i)
+              when (funcall cmp offset (point))
+              do (return (pdf--goto-location offset))))))
+
+(defun pdf-beginning-of-thing ()
+  "Move to the beginning of the thing at point."
+  (interactive)
+  (pdf--edge-of-thing #'pdf.offset #'<))
+
+(defun pdf-end-of-thing ()
+  "Move to the end of the thing at point."
+  (interactive)
+  (pdf--edge-of-thing #'pdf.end #'>))
+
+(defun pdf-mark-thing (start end)
+  "Mark thing at point.  Consecutive calls will extend region to
+contain the parent node."
+  (interactive "r")
+  (unless (use-region-p)
+    (setf start (point)
+          end (point)))
+  (goto-char end)
+  (pdf-end-of-thing)
+  (set-mark (point))
+  (pdf-beginning-of-thing))
+
+;;; --- mode definition ------------------------------------------------
 
 (defvar *pdf--new-object-template* "%d 0 obj <<
   |
@@ -813,9 +845,13 @@ the maximum ID among objects in the buffer."
 ;;; --- key bindings ---------------------------------------------------
 
 (define-key pdf-mode-map (kbd "C-c C-o") 'pdf-new-object)
+(define-key pdf-mode-map (kbd "C-c C-e") 'pdf-inflate-stream)
 (define-key pdf-mode-map (kbd "M-?") 'pdf-highlight-refs)
 (define-key pdf-mode-map (kbd "M-.") 'pdf-find-definition)
 (define-key pdf-mode-map (kbd "M-,") 'pdf-pop-location)
+(define-key pdf-mode-map (kbd "M-a") 'pdf-beginning-of-thing)
+(define-key pdf-mode-map (kbd "M-e") 'pdf-end-of-thing)
+(define-key pdf-mode-map (kbd "C-c C-SPC") 'pdf-mark-thing)
 
 (provide 'pdf-mode)
 ;;; pdf-mode.el ends here
