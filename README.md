@@ -29,11 +29,20 @@ Features:
 - `C-c C-o` — insert a new object (at point; make sure the cursor is somewhere where an object makes sense).  Pass a
   prefix argument (`C-u`) to make the new object a stream.
 
+- `C-c C-e` — decompress stream at point (`pdf-inflate-stream`).
+
 - `M-?` — highlight references to object/reference at point.
 
 - `M-.` — locate definition of object reference at point.
 
 - `M-,` — go back to previous location (after `M-.`).
+
+- `M-a` — move to beginning of thing at point (`pdf-beginning-of-thing`).
+
+- `M-e` — move to end of thing at point (`pdf-end-of-thing`).
+
+- `C-c C-SPC` — mark thing at point (`pdf-mark-thing`).  The selection will be extended to parent nodes on subsequent
+  calls.
 
 `pdf-fix-xrefs` will run automatically before saving a file, so if that succeeds the new file should be valid (i.e. the
 `xref` and `startxref` sections should be properly updated).  If there's a parse error, however, the file won't be saved
