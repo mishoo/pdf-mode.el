@@ -34,12 +34,16 @@
 (defvar *pdf--highlight* nil)
 (defvar *pdf--no-parse-errors* nil)
 (defvar *pdf--error-locations* nil)
+(defvar *pdf--ast* nil)
+
+(defvar *pdf--rx-object-start*
+  "\\([[:digit:]]+\\)[[:space:]\n]+\\([[:digit:]]+\\)[[:space:]\n]+obj")
 
 (defun pdf--read ()
   (pdf--skip-whitespace)
   (prog1
       (cond
-       ((looking-at "\\([[:digit:]]+\\)[[:space:]\n]+\\([[:digit:]]+\\)[[:space:]\n]+obj")
+       ((looking-at *pdf--rx-object-start*)
         (pdf--read-object))
 
        ((looking-at "<<")
@@ -318,14 +322,17 @@
     (end . ,(point))))
 
 (defun pdf--parse ()
-  (setf *pdf--error-locations* '())
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char (point-min))
-      (cl-loop for thing = (pdf--read)
-               when thing collect thing
-               until (eobp)))))
+  (or *pdf--ast*
+      (progn
+        (setf *pdf--error-locations* '())
+        (setf *pdf--ast*
+              (save-excursion
+                (save-restriction
+                  (widen)
+                  (goto-char (point-min))
+                  (cl-loop for thing = (pdf--read)
+                           when thing collect thing
+                           until (eobp))))))))
 
 ;;; AST utilities
 
@@ -382,15 +389,13 @@
 
 (defvar *pdf--needs-fontification* nil)
 
-(defun pdf--ensure-fontification (&rest ignore)
-  (setf *pdf--needs-fontification* t))
-
 (defun pdf--fontify-node (node)
   (pdf.visit
    node
    (lambda (node stage)
      (when (eq stage 'before)
-       (let* ((start (pdf.offset node))
+       (let* ((inhibit-read-only t)
+              (start (pdf.offset node))
               (end (pdf.end node))
               (type (pdf.type node))
               (prop (case type
@@ -420,24 +425,35 @@
                                 start end
                                 '(display "...binary stream content hidden..." read-only t))
                                'font-lock-comment-face)
-                           (let ((inhibit-read-only t))
-                             (remove-text-properties start end '(display nil read-only nil))
-                             'font-lock-doc-face))))
+                           (remove-text-properties start end '(display nil read-only nil))
+                           'font-lock-doc-face)))
                       (otherwise 'default))))
          (when (and start end prop
                     (>= start (point-min))
                     (<= end (point-max)))
            (add-text-properties start end `(face ,prop))))))))
 
-(defun pdf--fontify-buffer ()
+(defun pdf-fontify-buffer ()
+  (interactive)
   (when *pdf--needs-fontification*
     (setf *pdf--needs-fontification* nil)
     (let ((*pdf--highlight* t)
-          (*pdf--no-parse-errors* t))
+          (*pdf--no-parse-errors* t)
+          (inhibit-read-only t))
       (mapc #'pdf--fontify-node (pdf--parse)))))
 
-(defun pdf--fontify-region (begin end &optional verbose)
-  (pdf--fontify-buffer))
+(defun pdf-fontify-region (begin end)
+  (interactive "r")
+  (search-backward-regexp *pdf--rx-object-start* nil t)
+  (while (looking-back "[[:digit:]]")
+    (backward-char 1))
+  (let ((*pdf--highlight* t)
+        (*pdf--no-parse-errors* t)
+        (inhibit-read-only t))
+    (while (< (point) end)
+      (let ((node (pdf--read)))
+        (when node
+          (pdf--fontify-node node))))))
 
 ;;; --- highlight references -------------------------------------------
 
@@ -822,12 +838,17 @@ the maximum ID among objects in the buffer."
 
 ;;      )))
 
-(make-variable-buffer-local 'comment-start)
 (make-variable-buffer-local '*pdf--error-locations*)
 (make-variable-buffer-local '*pdf--needs-fontification*)
+(make-variable-buffer-local '*pdf--ast*)
+(make-variable-buffer-local 'comment-start)
 (make-variable-buffer-local 'font-lock-fontify-buffer-function)
 (make-variable-buffer-local 'font-lock-fontify-region-function)
 (make-variable-buffer-local 'next-error-function)
+
+(defun pdf--buffer-change-hook (&rest ignore)
+  (setf *pdf--needs-fontification* t)
+  (setf *pdf--ast* nil))
 
 (define-derived-mode pdf-mode
   fundamental-mode "PDF"
@@ -850,12 +871,12 @@ the maximum ID among objects in the buffer."
 
   ;;;;; font-lock
 
-  (pdf--ensure-fontification)
-  (setf font-lock-fontify-buffer-function 'pdf--fontify-buffer)
-  (setf font-lock-fontify-region-function 'pdf--fontify-region)
-  (jit-lock-register 'pdf--fontify-region)
+  (pdf--buffer-change-hook)
+  (setf font-lock-fontify-buffer-function 'pdf-fontify-buffer)
+  (setf font-lock-fontify-region-function 'pdf-fontify-region)
+  (jit-lock-register 'pdf-fontify-region)
 
-  (add-hook 'before-change-functions 'pdf--ensure-fontification nil t)
+  (add-hook 'before-change-functions 'pdf--buffer-change-hook nil t)
 
   ;; (setf font-lock-defaults *pdf-font-lock-defaults*)
   ;; (setf font-lock-defaults '(nil t))
@@ -872,6 +893,7 @@ the maximum ID among objects in the buffer."
 (define-key pdf-mode-map (kbd "M-a") 'pdf-beginning-of-thing)
 (define-key pdf-mode-map (kbd "M-e") 'pdf-end-of-thing)
 (define-key pdf-mode-map (kbd "C-c C-SPC") 'pdf-mark-thing)
+;; (define-key pdf-mode-map (kbd "<f3>") 'pdf-fontify-buffer)
 
 (provide 'pdf-mode)
 ;;; pdf-mode.el ends here
