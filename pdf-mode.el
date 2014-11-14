@@ -404,9 +404,25 @@
                       (xref-section 'font-lock-type-face)
                       ((object trailer xref startxref) 'font-lock-keyword-face)
                       (stream
-                       (setf start (pdf.start node)
-                             end (+ start (pdf.length node)))
-                       'font-lock-doc-face)
+                       (let ((filter (pdf.dict-val (pdf.dict node) "Filter")))
+                         (when filter
+                           (setf filter (if (pdf.array? filter)
+                                            (pdf.data filter)
+                                          (list filter))))
+                         (setf start (pdf.start node)
+                               end (+ start (pdf.length node)))
+                         (if (find-if-not (lambda (i)
+                                            (or (pdf.name? i "ASCIIHexDecode")
+                                                (pdf.name? i "ASCII85Decode")))
+                                          filter)
+                             (progn
+                               (add-text-properties
+                                start end
+                                '(display "...binary stream content hidden..." read-only t))
+                               'font-lock-comment-face)
+                           (let ((inhibit-read-only t))
+                             (remove-text-properties start end '(display nil read-only nil))
+                             'font-lock-doc-face))))
                       (otherwise 'default))))
          (when (and start end prop
                     (>= start (point-min))
@@ -658,6 +674,8 @@ good idea, but I got into it."
 ;; it myself yet.
 (defun pdf--inflate-region (begin end)
   (catch 'out
+    (let ((inhibit-read-only t))
+      (remove-text-properties begin end '(read-only nil)))
     (let* ((compressed (buffer-substring-no-properties begin end))
            (stderr (generate-new-buffer "gzip"))
            (uncompressed (with-temp-buffer
