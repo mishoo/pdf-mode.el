@@ -664,9 +664,11 @@ good idea, but I got into it."
                            ;; prepend gzip header
                            (insert "\x1f\x8b\x08\x00\x00\x00\x00\x00"
                                    compressed)
-                           (shell-command-on-region (point-min) (point-max)
-                                                    "gzip -dc" nil t
-                                                    stderr nil)
+                           (let ((coding-system-for-read 'raw-text)
+                                 (coding-system-for-write 'raw-text))
+                             (shell-command-on-region (point-min) (point-max)
+                                                      "gzip -dc" nil t
+                                                      stderr nil))
                            (buffer-string))))
       (unwind-protect
           (progn
