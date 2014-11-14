@@ -394,8 +394,7 @@
    node
    (lambda (node stage)
      (when (eq stage 'before)
-       (let* ((inhibit-read-only t)
-              (start (pdf.offset node))
+       (let* ((start (pdf.offset node))
               (end (pdf.end node))
               (type (pdf.type node))
               (prop (case type
@@ -423,9 +422,9 @@
                              (progn
                                (add-text-properties
                                 start end
-                                '(display "...binary stream content hidden..." read-only t))
+                                '(display "...binary stream content hidden..."))
                                'font-lock-comment-face)
-                           (remove-text-properties start end '(display nil read-only nil))
+                           (remove-text-properties start end '(display nil))
                            'font-lock-doc-face)))
                       (otherwise 'default))))
          (when (and start end prop
@@ -438,8 +437,7 @@
   (when *pdf--needs-fontification*
     (setf *pdf--needs-fontification* nil)
     (let ((*pdf--highlight* t)
-          (*pdf--no-parse-errors* t)
-          (inhibit-read-only t))
+          (*pdf--no-parse-errors* t))
       (mapc #'pdf--fontify-node (pdf--parse)))))
 
 (defun pdf-fontify-region (begin end)
@@ -448,8 +446,7 @@
   (while (looking-back "[[:digit:]]")
     (backward-char 1))
   (let ((*pdf--highlight* t)
-        (*pdf--no-parse-errors* t)
-        (inhibit-read-only t))
+        (*pdf--no-parse-errors* t))
     (while (< (point) end)
       (let ((node (pdf--read)))
         (when node
@@ -690,8 +687,6 @@ good idea, but I got into it."
 ;; it myself yet.
 (defun pdf--inflate-region (begin end)
   (catch 'out
-    (let ((inhibit-read-only t))
-      (remove-text-properties begin end '(read-only nil)))
     (let* ((compressed (buffer-substring-no-properties begin end))
            (stderr (generate-new-buffer "gzip"))
            (uncompressed (with-temp-buffer
