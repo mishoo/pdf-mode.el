@@ -29,66 +29,44 @@
 
 ;;; --- parser and syntax highlighting ---------------------------------
 
-(defvar *pdf--rx-delimiter* "\\(?:[][)(><}{/%[:space:]\n]\\|$\\)")
 (defvar *pdf--fix-stream-length* nil)
 (defvar *pdf--highlight* nil)
 (defvar *pdf--no-parse-errors* nil)
 (defvar *pdf--error-locations* nil)
 (defvar *pdf--ast* nil)
 
-(defvar *pdf--rx-object-start*
-  "\\([[:digit:]]+\\)[[:space:]\n]+\\([[:digit:]]+\\)[[:space:]\n]+obj")
+(defvar *pdf--rx-delimiter* "\\(?:[][)(><}{/%[:space:]\n]\\|$\\)")
+(defvar *pdf--rx-object* (concat "\\([[:digit:]]+\\)[[:space:]\n]+\\([[:digit:]]+\\)[[:space:]\n]+\\(obj\\)" *pdf--rx-delimiter*))
+(defvar *pdf--rx-endobject* (concat "\\(endobj\\)" *pdf--rx-delimiter*))
+(defvar *pdf--rx-ref* (concat "\\([[:digit:]]+\\)[[:space:]\n]+\\([[:digit:]]+\\)[[:space:]\n]+\\(R\\)" *pdf--rx-delimiter*))
+(defvar *pdf--rx-bool* (concat "\\(true\\|false\\)" *pdf--rx-delimiter*))
+(defvar *pdf--rx-null* (concat "\\(null\\)" *pdf--rx-delimiter*))
+(defvar *pdf--rx-xref* (concat "\\(xref\\)" *pdf--rx-delimiter*))
+(defvar *pdf--rx-trailer* (concat "\\(trailer\\)" *pdf--rx-delimiter*))
+(defvar *pdf--rx-startxref* (concat "\\(startxref\\)" *pdf--rx-delimiter*))
+(defvar *pdf--rx-stream* (concat "\\(stream\\)" *pdf--rx-delimiter*))
+(defvar *pdf--rx-endstream* (concat "\\(endstream\\)" *pdf--rx-delimiter*))
+(defvar *pdf--rx-name* (concat "/\\(.*?\\)" *pdf--rx-delimiter*))
+(defvar *pdf--rx-number* "[-+]?[[:digit:]]+\\(?:\\.[[:digit:]]+\\)?\\|[-+]?\\(?:\\.[[:digit:]]+\\)")
 
 (defun pdf--read ()
   (pdf--skip-whitespace)
   (prog1
-      (cond
-       ((looking-at *pdf--rx-object-start*)
-        (pdf--read-object))
-
-       ((looking-at "<<")
-        (pdf--read-dictionary))
-
-       ((looking-at "/")
-        (pdf--read-name))
-
-       ((looking-at "\\[")
-        (pdf--read-array))
-
-       ((looking-at (concat "\\(\\([[:digit:]]+\\)[[:space:]\n]+\\([[:digit:]]+\\)[[:space:]\n]+R\\)"
-                            *pdf--rx-delimiter*))
-        (pdf--read-ref))
-
-       ((looking-at "[-+]?[[:digit:]]+\\(?:\\.[[:digit:]]+\\)?")
-        (pdf--read-number))
-
-       ((looking-at "[-+]?\\(?:\\.[[:digit:]]+\\)")
-        (pdf--read-number))
-
-       ((looking-at (concat "\\(true\\|false\\)" *pdf--rx-delimiter*))
-        (pdf--read-bool))
-
-       ((looking-at (concat "\\(null\\)" *pdf--rx-delimiter*))
-        (pdf--read-null))
-
-       ((looking-at "(")
-        (pdf--read-literal-string))
-
-       ((looking-at "<")
-        (pdf--read-hex-string))
-
-       ((looking-at (concat "\\(xref\\)" *pdf--rx-delimiter*))
-        (pdf--read-xref))
-
-       ((looking-at (concat "\\(trailer\\)" *pdf--rx-delimiter*))
-        (pdf--read-trailer))
-
-       ((looking-at (concat "\\(startxref\\)" *pdf--rx-delimiter*))
-        (pdf--read-startxref))
-
-       ((not (eobp))
-        (pdf--croak "Can't parse that" t)))
-
+      (or (pdf--read-object)
+          (pdf--read-ref)
+          (pdf--read-dictionary)
+          (pdf--read-array)
+          (pdf--read-name)
+          (pdf--read-number)
+          (pdf--read-bool)
+          (pdf--read-null)
+          (pdf--read-literal-string)
+          (pdf--read-hex-string)
+          (pdf--read-xref)
+          (pdf--read-trailer)
+          (pdf--read-startxref)
+          (if (eobp) nil
+            (pdf--croak "Can't parse that" t)))
     (pdf--skip-whitespace)))
 
 (defun pdf--croak (msg &optional skip)
@@ -104,23 +82,44 @@
       (remove-text-properties (point) (1+ (point)) '(face nil)))
     (forward-char 1)))
 
+(defun pdf--colorize* (stuff add)
+  (when *pdf--highlight*
+    (cl-loop for (i . props) in stuff
+             for start = (cond ((numberp i) (match-beginning i))
+                               ((consp i) (car i)))
+             for end = (cond ((numberp i) (match-end i))
+                             ((consp i) (cdr i)))
+             when (and start end) do (funcall add start end props))))
+
+(defun pdf--colorize (stuff)
+  (pdf--colorize* stuff #'add-text-properties))
+
+(defun pdf--uncolorize (stuff)
+  (pdf--colorize* stuff #'remove-text-properties))
+
+(defmacro def-pdf-parser (name rx args &rest body)
+  `(defun ,name ,args
+     (when (looking-at ,rx)
+       ,@body)))
+
 (defun pdf--skip-whitespace ()
   (while (looking-at "\\(?:[[:space:]\n]+\\|\\(%.*\\)\\)")
-    (when (and *pdf--highlight* (match-beginning 1))
-      (add-text-properties (match-beginning 1)
-                           (match-end 1)
-                           '(face font-lock-comment-face)))
+    (pdf--colorize '((1 face font-lock-comment-face)))
     (goto-char (match-end 0))))
 
-(defun pdf--read-object ()
+(def-pdf-parser pdf--read-object *pdf--rx-object* ()
+  (pdf--colorize '((1 face font-lock-variable-name-face)
+                   (2 face font-lock-variable-name-face)
+                   (3 face font-lock-keyword-face)))
   (goto-char (match-end 0))
   (let ((offset (match-beginning 0))
         (id (string-to-number (match-string 1)))
         (rev (string-to-number (match-string 2)))
         (data (pdf--read)))
-    (if (looking-at "endobj")
+    (if (looking-at *pdf--rx-endobject*)
         (progn
-          (goto-char (match-end 0))
+          (pdf--colorize '((1 face font-lock-keyword-face)))
+          (goto-char (match-end 1))
           `((type . object)
             (offset . ,offset)
             (end . ,(point))
@@ -129,17 +128,33 @@
             (data . ,data)))
       (pdf--croak "Missing endobj"))))
 
-(defun pdf--read-stream (dict)
+(def-pdf-parser pdf--read-ref *pdf--rx-ref* ()
+  (pdf--colorize '((1 face font-lock-variable-name-face)
+                   (2 face font-lock-variable-name-face)
+                   (3 face font-lock-keyword-face)))
+  (goto-char (match-end 3))
+  `((type . ref)
+    (offset . ,(match-beginning 1))
+    (end . ,(point))
+    (id . ,(string-to-number (match-string 1)))
+    (rev . ,(string-to-number (match-string 2)))))
+
+(def-pdf-parser pdf--read-stream *pdf--rx-stream* (dict)
+  (pdf--colorize '((1 face font-lock-keyword-face)))
   (goto-char (match-end 1))
   (let ((offset (match-beginning 1))
         (lenprop (pdf.dict-val dict "Length")))
     (unless lenprop
       (pdf--croak "No Length in stream dictionary"))
     (let ((start (1+ (point))))
-      (if (search-forward-regexp "endstream\\>" nil t)
-          (let ((curlen (- (match-beginning 0) start))
-                (end (match-end 0)))
-            (goto-char (match-beginning 0))
+      (if (search-forward-regexp *pdf--rx-endstream* nil t)
+          (let ((curlen (- (match-beginning 1) start))
+                (end (match-end 1)))
+            (pdf--colorize `((1 face font-lock-keyword-face)
+                             ((,start . ,(match-beginning 1)) face font-lock-comment-face)))
+            ;; (remove-text-properties start (match-beginning 1)
+            ;;                         '(display nil))
+            (goto-char (match-beginning 1))
             (when (and (looking-back "^")
                        (> curlen 0))
               (decf curlen))
@@ -157,76 +172,70 @@
               (dict . ,dict)))
         (pdf--croak "Missing endstream")))))
 
-(defun pdf--read-dictionary ()
+(def-pdf-parser pdf--read-dictionary "<<" ()
+  (pdf--uncolorize '((0 face nil)))
   (goto-char (match-end 0))
   (let ((offset (match-beginning 0))
         (data (cl-loop do (pdf--skip-whitespace)
                        until (or (eobp) (looking-at ">>"))
                        collect `(,(pdf--read) . ,(pdf--read)))))
     (unless (eobp)
+      (pdf--colorize '((0 face nil)))
       (goto-char (match-end 0)))
     (let ((dict `((type . dictionary)
                   (offset . ,offset)
                   (end . ,(point))
                   (data . ,data))))
       (pdf--skip-whitespace)
-      (if (looking-at (concat "\\(stream\\)" *pdf--rx-delimiter*))
-          (pdf--read-stream dict)
-        dict))))
+      (or (pdf--read-stream dict) dict))))
 
-(defun pdf--read-array ()
+(def-pdf-parser pdf--read-array "\\[" ()
+  (pdf--uncolorize '((0 face nil)))
   (goto-char (match-end 0))
   (let ((offset (match-beginning 0))
         (data (cl-loop do (pdf--skip-whitespace)
                        until (or (eobp) (looking-at "\\]"))
                        collect (pdf--read))))
     (unless (eobp)
+      (pdf--uncolorize '((0 face nil)))
       (goto-char (match-end 0)))
     `((type . array)
       (offset . ,offset)
       (end . ,(point))
       (data . ,data))))
 
-(defun pdf--read-name ()
+(def-pdf-parser pdf--read-name *pdf--rx-name* ()
+  (pdf--colorize '((0 face font-lock-function-name-face)))
   (goto-char (match-end 0))
-  (let ((offset (match-beginning 0))
-        (data (when (looking-at (concat "\\(.*?\\)" *pdf--rx-delimiter*))
-                (goto-char (match-end 1))
-                (match-string 1))))
-    `((type . name)
-      (offset . ,offset)
-      (end . ,(point))
-      (data . ,data))))
+  `((type . name)
+    (offset . ,(match-beginning 0))
+    (end . ,(point))
+    (data . ,(match-string 1))))
 
-(defun pdf--read-number ()
+(def-pdf-parser pdf--read-number *pdf--rx-number* ()
+  (pdf--colorize '((0 face font-lock-constant-face)))
   (goto-char (match-end 0))
   `((type . number)
     (offset . ,(match-beginning 0))
     (end . ,(point))
     (data . ,(string-to-number (match-string 0)))))
 
-(defun pdf--read-ref ()
-  (goto-char (match-end 1))
-  `((type . ref)
-    (offset . ,(match-beginning 1))
-    (end . ,(point))
-    (id . ,(string-to-number (match-string 2)))
-    (rev . ,(string-to-number (match-string 3)))))
-
-(defun pdf--read-bool ()
+(def-pdf-parser pdf--read-bool *pdf--rx-bool* ()
+  (pdf--colorize '((1 face font-lock-builtin-face)))
   (goto-char (match-end 1))
   `((type . bool)
     (offset . ,(match-beginning 1))
     (end . ,(point))
     (data . ,(match-string 1))))
 
-(defun pdf--read-null ()
+(def-pdf-parser pdf--read-null *pdf--rx-null* ()
+  (pdf--colorize '((1 face font-lock-builtin-face)))
   (goto-char (match-end 1))
   `((type . null)
     (offset . ,(match-beginning 1))
     (end . ,(point))))
 
-(defun pdf--read-literal-string ()
+(def-pdf-parser pdf--read-literal-string "(" ()
   (goto-char (match-end 0))
   (let ((offset (match-beginning 0))
         (parens 0)
@@ -255,12 +264,13 @@
                 (t
                  (collect (char-after))
                  (forward-char 1)))))
+      (pdf--colorize `(((,offset . ,(point)) face font-lock-string-face)))
       `((type . lstring)
         (offset . ,offset)
         (end . ,(point))
         (data . ,(apply #'string (reverse data)))))))
 
-(defun pdf--read-hex-string ()
+(def-pdf-parser pdf--read-hex-string "<" ()
   (goto-char (match-end 0))
   (let ((offset (match-beginning 0))
         (data '()))
@@ -276,6 +286,7 @@
       (if (looking-at ">")
           (progn
             (forward-char 1)
+            (pdf--colorize `(((,offset . ,(point)) face font-lock-string-face)))
             `((type . xstring)
               (offset . ,offset)
               (end . ,(point))
@@ -291,9 +302,14 @@
                      (id . ,(incf start))
                      (rev . ,(string-to-number (match-string 2)))
                      (fn . ,(match-string 3)))
-           do (goto-char (1+ (match-end 0)))))
+           do
+           (pdf--colorize '((1 face font-lock-reference-face)
+                            (2 face font-lock-constant-face)
+                            (3 face font-lock-keyword-face)))
+           (goto-char (1+ (match-end 0)))))
 
-(defun pdf--read-xref ()
+(def-pdf-parser pdf--read-xref *pdf--rx-xref* ()
+  (pdf--colorize '((1 face font-lock-keyword-face)))
   (let ((offset (match-beginning 1)))
     (goto-char (match-end 1))
     (pdf--skip-whitespace)
@@ -307,14 +323,16 @@
         (end . ,(point))
         (data . ,data)))))
 
-(defun pdf--read-trailer ()
+(def-pdf-parser pdf--read-trailer *pdf--rx-trailer* ()
+  (pdf--colorize '((1 face font-lock-keyword-face)))
   (goto-char (match-end 1))
   `((type . trailer)
     (offset . ,(match-beginning 1))
     (data . ,(pdf--read))
     (end . ,(point))))
 
-(defun pdf--read-startxref ()
+(def-pdf-parser pdf--read-startxref *pdf--rx-startxref* ()
+  (pdf--colorize '((1 face font-lock-keyword-face)))
   (goto-char (match-end 1))
   `((type . startxref)
     (offset . ,(match-beginning 1))
@@ -384,73 +402,6 @@
                         (pdf.data node)))
     (trailer (pdf.visit (pdf.data node) func)))
   (funcall func node 'after))
-
-;;; fontification; should be better built-in the parser
-
-(defvar *pdf--needs-fontification* nil)
-
-(defun pdf--fontify-node (node)
-  (pdf.visit
-   node
-   (lambda (node stage)
-     (when (eq stage 'before)
-       (let* ((start (pdf.offset node))
-              (end (pdf.end node))
-              (type (pdf.type node))
-              (prop (case type
-                      (number 'font-lock-constant-face)
-                      (name 'font-lock-builtin-face)
-                      (lstring 'font-lock-string-face)
-                      (xstring 'font-lock-string-face)
-                      (bool 'font-lock-constant-face)
-                      (null 'font-lock-constant-face)
-                      (ref 'font-lock-type-face)
-                      (xref-section 'font-lock-type-face)
-                      ((object trailer xref startxref) 'font-lock-keyword-face)
-                      (stream
-                       (let ((filter (pdf.dict-val (pdf.dict node) "Filter")))
-                         (when filter
-                           (setf filter (if (pdf.array? filter)
-                                            (pdf.data filter)
-                                          (list filter))))
-                         (setf start (pdf.start node)
-                               end (+ start (pdf.length node)))
-                         (if (find-if-not (lambda (i)
-                                            (or (pdf.name? i "ASCIIHexDecode")
-                                                (pdf.name? i "ASCII85Decode")))
-                                          filter)
-                             (progn
-                               (add-text-properties
-                                start end
-                                '(display "...binary stream content hidden..."))
-                               'font-lock-comment-face)
-                           (remove-text-properties start end '(display nil))
-                           'font-lock-doc-face)))
-                      (otherwise 'default))))
-         (when (and start end prop
-                    (>= start (point-min))
-                    (<= end (point-max)))
-           (add-text-properties start end `(face ,prop))))))))
-
-(defun pdf-fontify-buffer ()
-  (interactive)
-  (when *pdf--needs-fontification*
-    (setf *pdf--needs-fontification* nil)
-    (let ((*pdf--highlight* t)
-          (*pdf--no-parse-errors* t))
-      (mapc #'pdf--fontify-node (pdf--parse)))))
-
-(defun pdf-fontify-region (begin end)
-  (interactive "r")
-  (search-backward-regexp *pdf--rx-object-start* nil t)
-  (while (looking-back "[[:digit:]]")
-    (backward-char 1))
-  (let ((*pdf--highlight* t)
-        (*pdf--no-parse-errors* t))
-    (while (< (point) end)
-      (let ((node (pdf--read)))
-        (when node
-          (pdf--fontify-node node))))))
 
 ;;; --- highlight references -------------------------------------------
 
@@ -833,6 +784,32 @@ the maximum ID among objects in the buffer."
 
 ;;      )))
 
+(defvar *pdf--needs-fontification* nil)
+
+(defun pdf-fontify-buffer ()
+  (interactive)
+  (when *pdf--needs-fontification*
+    (setf *pdf--needs-fontification* nil)
+    (let ((*pdf--highlight* t)
+          (*pdf--no-parse-errors* t))
+      (pdf--parse))))
+
+(defun pdf-fontify-region (begin end)
+  (interactive "r")
+  (search-backward-regexp *pdf--rx-object* nil t)
+  (while (looking-back "[[:digit:]]")
+    (backward-char 1))
+  (let ((*pdf--highlight* t)
+        (*pdf--no-parse-errors* t))
+    ;; (while (< (point) end)
+    ;;   (pdf--read))
+    (cl-loop while (not (eobp))
+             for i = (point)
+             for before = (get-text-property i 'face)
+             do (pdf--read)
+             for after = (get-text-property i 'face)
+             until (and (> i end) (eq before after)))))
+
 (make-variable-buffer-local '*pdf--error-locations*)
 (make-variable-buffer-local '*pdf--needs-fontification*)
 (make-variable-buffer-local '*pdf--ast*)
@@ -888,7 +865,8 @@ the maximum ID among objects in the buffer."
 (define-key pdf-mode-map (kbd "M-a") 'pdf-beginning-of-thing)
 (define-key pdf-mode-map (kbd "M-e") 'pdf-end-of-thing)
 (define-key pdf-mode-map (kbd "C-c C-SPC") 'pdf-mark-thing)
-;; (define-key pdf-mode-map (kbd "<f3>") 'pdf-fontify-buffer)
+(define-key pdf-mode-map (kbd "C-c C-<up>") 'pdf-mark-thing)
+(define-key pdf-mode-map (kbd "<f3>") 'pdf-fontify-buffer)
 
 (provide 'pdf-mode)
 ;;; pdf-mode.el ends here
