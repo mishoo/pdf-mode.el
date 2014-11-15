@@ -206,7 +206,7 @@
 
 (def-pdf-parser pdf--read-name *pdf--rx-name* ()
   (pdf--colorize '((0 face font-lock-function-name-face)))
-  (goto-char (match-end 0))
+  (goto-char (match-end 1))
   `((type . name)
     (offset . ,(match-beginning 0))
     (end . ,(point))
