@@ -751,39 +751,6 @@ the maximum ID among objects in the buffer."
        (search-backward "|")
        (delete-forward-char 1)))))
 
-;; (defvar *pdf-font-lock-defaults*
-;;   `((
-
-;;      ("\\(%+\\)\\(.*\\)"
-;;       (1 font-lock-comment-delimiter-face)
-;;       (2 font-lock-comment-face))
-
-;;      ("/[[:word:]]+" . font-lock-function-name-face)
-
-;;      ("\\<\\([[:digit:]]+\s+[[:digit:]]\\)+\s+\\(obj\\)\\>"
-;;       (1 font-lock-variable-name-face)
-;;       (2 font-lock-keyword-face))
-
-;;      ("\\<\\([[:digit:]]+\s+[[:digit:]]\\)+\s+\\(R\\)\\>"
-;;       (1 font-lock-type-face)
-;;       (2 font-lock-builtin-face))
-
-;;      (,(regexp-opt '("obj" "endobj"
-;;                      "stream" "endstream"
-;;                      "xref" "startxref" "trailer")
-;;                    'words)
-;;       . font-lock-keyword-face)
-
-;;      (,(regexp-opt '("true" "false" "null")) . font-lock-builtin-face)
-
-;;      ("<\\([a-fA-F0-9[:space:]]+\\)>" (1 font-lock-string-face))
-
-;;      ("(\\(.*?\\))" (1 font-lock-string-face))
-
-;;      ("[-+]?[[:digit:]]+\\(?:\\.[[:digit:]]+\\)?" . font-lock-constant-face)
-
-;;      )))
-
 (defvar *pdf--needs-fontification* nil)
 
 (defun pdf-fontify-buffer ()
@@ -801,8 +768,6 @@ the maximum ID among objects in the buffer."
     (backward-char 1))
   (let ((*pdf--highlight* t)
         (*pdf--no-parse-errors* t))
-    ;; (while (< (point) end)
-    ;;   (pdf--read))
     (cl-loop while (not (eobp))
              for i = (point)
              for before = (get-text-property i 'face)
@@ -833,7 +798,6 @@ the maximum ID among objects in the buffer."
   (dolist (i '(?. ?- ?_ ?* ?+))
     (modify-syntax-entry i "_" pdf-mode-syntax-table))
 
-  ;; WTF?  this breaks our parser!
   (modify-syntax-entry ?% "<" pdf-mode-syntax-table)
   (modify-syntax-entry ?\n ">" pdf-mode-syntax-table)
 
@@ -848,12 +812,7 @@ the maximum ID among objects in the buffer."
   (setf font-lock-fontify-region-function 'pdf-fontify-region)
   (jit-lock-register 'pdf-fontify-region)
 
-  (add-hook 'before-change-functions 'pdf--buffer-change-hook nil t)
-
-  ;; (setf font-lock-defaults *pdf-font-lock-defaults*)
-  ;; (setf font-lock-defaults '(nil t))
-
-  )
+  (add-hook 'before-change-functions 'pdf--buffer-change-hook nil t))
 
 ;;; --- key bindings ---------------------------------------------------
 
