@@ -549,7 +549,7 @@ section (i.e. 0000000234 00000 f)."
 
 ;;; --- rewrite xref utility -------------------------------------------
 
-(defun pdf--dig-buffer (cont)
+(defun pdf--toplevel-objects (cont)
   (cl-loop with nodes = (pdf--parse)
            for i in nodes
            for type = (pdf.type i)
@@ -583,8 +583,10 @@ section (i.e. 0000000234 00000 f)."
   (let ((*pdf--fix-stream-length* t)
         (del (lambda (x)
                (delete-region (pdf.offset x) (pdf.end x)))))
-    (pdf--dig-buffer
+    (pdf--toplevel-objects
      (lambda (nodes objects xref startxref trailer)
+       (unless trailer
+         (error "No trailer found."))
        (let ((trailer-code (buffer-substring-no-properties
                             (pdf.offset (car trailer))
                             (pdf.end (car trailer)))))
@@ -742,7 +744,7 @@ endstream endobj")
 make it a stream object.  The new object ID will be one more than
 the maximum ID among objects in the buffer."
   (interactive "P")
-  (pdf--dig-buffer
+  (pdf--toplevel-objects
    (lambda (nodes objects &rest ignore)
      (let ((max-id (reduce #'max objects :key #'pdf.id :initial-value 0)))
        (insert (format (if stream
